@@ -27,7 +27,13 @@ SBarcodeScanner::SBarcodeScanner(QObject* parent)
 SBarcodeScanner::~SBarcodeScanner()
 {
     workerThread.quit();
-    workerThread.wait();
+    // On Windows, terminate immediately to avoid deadlock with ReadBarcode()
+    // On other platforms, wait for graceful shutdown so lambdas can check validity
+    #ifdef Q_OS_WIN
+        workerThread.terminate();
+    #else
+        workerThread.wait();
+    #endif
 }
 
 SBarcodeDecoder* SBarcodeScanner::getDecoder()
