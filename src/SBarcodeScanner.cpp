@@ -1,5 +1,6 @@
 #include "SBarcodeScanner.h"
 #include <QMediaDevices>
+#include <QMetaObject>
 #include "private/debug.h"
 SBarcodeScanner::SBarcodeScanner(QObject* parent)
     : QVideoSink(parent)
@@ -26,14 +27,7 @@ SBarcodeScanner::SBarcodeScanner(QObject* parent)
 
 SBarcodeScanner::~SBarcodeScanner()
 {
-    workerThread.quit();
-    // On Windows, terminate immediately to avoid deadlock with ReadBarcode()
-    // On other platforms, wait for graceful shutdown so lambdas can check validity
-    #ifdef Q_OS_WIN
-        workerThread.terminate();
-    #else
-        workerThread.wait();
-    #endif
+    shutdownWorkerThread();
 }
 
 SBarcodeDecoder* SBarcodeScanner::getDecoder()
@@ -58,7 +52,7 @@ void SBarcodeScanner::classBegin()
 
 void SBarcodeScanner::tryProcessFrame(const QVideoFrame& frame)
 {
-    if(!m_scanning || m_frameProcessingInProgress) {
+    if(!m_scanning || m_frameProcessingInProgress || m_camera.isNull()) {
         return;
     }
     // Set the guard variable to not process more than 1 frame at the time
@@ -78,6 +72,27 @@ void SBarcodeScanner::tryProcessFrame(const QVideoFrame& frame)
         m_decoder.process(m_decoder.videoFrameToImage(frame, cRect),SCodes::toZXingFormat(SCodes::SBarcodeFormat::Basic));
         m_frameProcessingInProgress = false;
     });
+}
+
+void SBarcodeScanner::shutdownWorkerThread()
+{
+    m_scanning = false;
+    disconnect(this, &QVideoSink::videoFrameChanged, this, &SBarcodeScanner::tryProcessFrame);
+
+    if (m_camera) {
+        m_camera->stop();
+    }
+
+    m_capture.setCamera(nullptr);
+    m_capture.setVideoSink(nullptr);
+
+    // Queue a barrier call in the decoder thread so previously queued frame jobs
+    // finish before the thread is asked to exit.
+    if (workerThread.isRunning()) {
+        QMetaObject::invokeMethod(&m_decoder, []() {}, Qt::BlockingQueuedConnection);
+        workerThread.quit();
+        workerThread.wait();
+    }
 }
 
 void SBarcodeScanner::setCameraAvailable(bool available)
@@ -195,11 +210,16 @@ void SBarcodeScanner::setCamera(QCamera *newCamera)
         m_camera = newCamera;
         m_camera->start();
     }
-    sDebug() << "New Camera set: " << m_camera
-            << "\nFormat:\n"
-            << "  Pixel format:" << m_camera->cameraFormat().pixelFormat() << '\n'
-            << "  Resolution:" << m_camera->cameraFormat().resolution() << '\n'
-            << "  FPS:" << m_camera->cameraFormat().minFrameRate() << "-" << m_camera->cameraFormat().maxFrameRate();
+
+    if (m_camera) {
+        sDebug() << "New Camera set: " << m_camera
+                << "\nFormat:\n"
+                << "  Pixel format:" << m_camera->cameraFormat().pixelFormat() << '\n'
+                << "  Resolution:" << m_camera->cameraFormat().resolution() << '\n'
+                << "  FPS:" << m_camera->cameraFormat().minFrameRate() << "-" << m_camera->cameraFormat().maxFrameRate();
+    } else {
+        sDebug() << "Camera cleared";
+    }
 
     emit cameraChanged(m_camera);
 }
