@@ -98,6 +98,7 @@ private:
     void setCaptured(const QString &captured);
     /// Try process captured frame, if previous frame is already processed - skip it
     void tryProcessFrame(const QVideoFrame &frame);
+    void shutdownWorkerThread();
 
     /*!
      * \fn void setCameraAvailable(bool available)
